@@ -1,6 +1,8 @@
 import streamlit as st
 from langchain_community.llms import Ollama
 from langchain_core.prompts import PromptTemplate
+from langchain_community.tools import DuckDuckGoSearchRun
+import wikipedia
 
 # Page configuration
 st.set_page_config(
@@ -77,6 +79,11 @@ with st.sidebar:
     include_hook = st.checkbox("Include Hook/Introduction", value=True)
     include_outro = st.checkbox("Include Call-to-Action/Outro", value=True)
     include_timestamps = st.checkbox("Include Timestamps", value=False)
+    
+    # Research options
+    st.subheader("🔍 Research Options")
+    enable_google_search = st.checkbox("Enable Google Search", value=False, help="Search Google for current information about the topic")
+    enable_wikipedia = st.checkbox("Enable Wikipedia Search", value=False, help="Search Wikipedia for detailed information about the topic")
 
 # Main content area
 col1, col2 = st.columns([1, 1])
@@ -139,9 +146,84 @@ def load_ollama_model(model_name):
         st.info("Make sure Ollama is running. You can start it by running: `ollama serve`")
         return None
 
+# Search functions
+def search_google(query, max_results=3):
+    """Search Google using DuckDuckGo"""
+    try:
+        search = DuckDuckGoSearchRun()
+        # Try invoke first (newer API), fallback to run
+        try:
+            results = search.invoke(f"{query}")
+        except:
+            results = search.run(f"{query}")
+        return results[:1500] if results else ""  # Limit to 1500 chars
+    except Exception as e:
+        st.warning(f"Google search error: {str(e)}")
+        return ""
+
+def search_wikipedia(query, max_results=2):
+    """Search Wikipedia for information"""
+    try:
+        wikipedia.set_lang("en")
+        search_results = wikipedia.search(query, results=max_results)
+        wiki_info = ""
+        
+        for title in search_results:
+            try:
+                page = wikipedia.page(title, auto_suggest=False)
+                wiki_info += f"\n\n**{page.title}:**\n{page.summary[:500]}\n"
+            except wikipedia.exceptions.DisambiguationError as e:
+                # If disambiguation, try the first option
+                try:
+                    page = wikipedia.page(e.options[0], auto_suggest=False)
+                    wiki_info += f"\n\n**{page.title}:**\n{page.summary[:500]}\n"
+                except:
+                    continue
+            except:
+                continue
+        
+        return wiki_info
+    except Exception as e:
+        st.warning(f"Wikipedia search error: {str(e)}")
+        return ""
+
+def gather_research_info(topic, key_points, enable_google, enable_wiki):
+    """Gather research information from Google and Wikipedia"""
+    research_info = ""
+    
+    if enable_google or enable_wiki:
+        search_query = f"{topic}"
+        if key_points:
+            search_query += f" {key_points[:100]}"
+    
+    if enable_google:
+        with st.spinner("🔍 Searching Google..."):
+            google_results = search_google(search_query)
+            if google_results:
+                research_info += f"\n\n=== GOOGLE SEARCH RESULTS ===\n{google_results}\n"
+    
+    if enable_wiki:
+        with st.spinner("📚 Searching Wikipedia..."):
+            wiki_results = search_wikipedia(topic)
+            if wiki_results:
+                research_info += f"\n\n=== WIKIPEDIA INFORMATION ===\n{wiki_results}\n"
+    
+    return research_info
+
 # Generate script function
-def generate_script(topic, audience, key_points, notes, length, style, tone, language, hook, outro, timestamps):
+def generate_script(topic, audience, key_points, notes, length, style, tone, language, hook, outro, timestamps, enable_google=False, enable_wiki=False):
+    # Gather research information if enabled
+    research_info = ""
+    if enable_google or enable_wiki:
+        research_info = gather_research_info(topic, key_points, enable_google, enable_wiki)
+    
     # Build the prompt
+    research_section = f"""
+    
+RESEARCH INFORMATION (Use this to enhance accuracy and add current facts):
+{research_info if research_info else "No research information available. Use your knowledge to create the script."}
+""" if research_info else ""
+    
     prompt_text = f"""Create a comprehensive YouTube script for a video with the following details:
 
 Topic/Title: {topic}
@@ -156,7 +238,7 @@ Key Points to Cover:
 
 Additional Notes:
 {notes if notes else 'None'}
-
+{research_section}
 Requirements:
 - {"Include an engaging hook/introduction at the beginning" if hook else ""}
 - Create well-structured content with clear sections
@@ -166,6 +248,7 @@ Requirements:
 - Use natural, conversational language
 - Include transitions between sections
 - Make it approximately {length} in duration
+- {"Use the research information provided above to ensure accuracy and include current facts" if research_info else ""}
 
 Please create a complete YouTube script with:
 1. {"[HOOK/INTRODUCTION]" if hook else ""}
@@ -215,7 +298,9 @@ if generate_button:
             language,
             include_hook,
             include_outro,
-            include_timestamps
+            include_timestamps,
+            enable_google_search,
+            enable_wikipedia
         )
         
         if script:
